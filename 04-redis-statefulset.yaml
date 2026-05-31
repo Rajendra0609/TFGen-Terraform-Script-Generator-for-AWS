@@ -1,0 +1,120 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: tfgen-redis
+  namespace: tfgen
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/component: cache
+    app.kubernetes.io/part-of: tfgen
+spec:
+  clusterIP: None
+  selector:
+    app: tfgen-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+      protocol: TCP
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: tfgen-redis-svc
+  namespace: tfgen
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/component: cache
+    app.kubernetes.io/part-of: tfgen
+spec:
+  type: ClusterIP
+  selector:
+    app: tfgen-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+      protocol: TCP
+---
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: tfgen-redis
+  namespace: tfgen
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/component: cache
+    app.kubernetes.io/part-of: tfgen
+spec:
+  serviceName: tfgen-redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tfgen-redis
+  template:
+    metadata:
+      labels:
+        app: tfgen-redis
+        app.kubernetes.io/name: redis
+        app.kubernetes.io/component: cache
+        app.kubernetes.io/part-of: tfgen
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: redis
+          image: redis:7
+          imagePullPolicy: IfNotPresent
+          command:
+            - redis-server
+            - --appendonly
+            - "yes"
+            - --save
+            - "60"        
+            - "1"
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          volumeMounts:
+            - name: redisdata
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+  volumeClaimTemplates:
+    - metadata:
+        name: redisdata
+        labels:
+          app.kubernetes.io/name: redis
+          app.kubernetes.io/part-of: tfgen
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        # storageClassName: gp3
+        resources:
+          requests:
+            storage: 5Gi

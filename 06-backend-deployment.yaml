@@ -1,0 +1,189 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: tfgen-backend
+  namespace: tfgen
+  labels:
+    app.kubernetes.io/name: tfgen-backend
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: tfgen
+spec:
+  type: ClusterIP
+  selector:
+    app: tfgen-backend
+  ports:
+    - name: http
+      port: 4000
+      targetPort: 4000
+      protocol: TCP
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tfgen-backend
+  namespace: tfgen
+  labels:
+    app.kubernetes.io/name: tfgen-backend
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: tfgen
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: tfgen-backend
+  template:
+    metadata:
+      labels:
+        app: tfgen-backend
+        app.kubernetes.io/name: tfgen-backend
+        app.kubernetes.io/component: backend
+        app.kubernetes.io/part-of: tfgen
+    spec:
+      terminationGracePeriodSeconds: 30
+      
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:15
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h tfgen-postgres-svc -p 5432 -U "$POSTGRES_USER"; do
+                echo "Waiting for PostgreSQL..."; sleep 3
+              done
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: tfgen-secret
+                  key: POSTGRES_USER
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+        - name: wait-for-redis
+          image: redis:7
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              until redis-cli -h tfgen-redis-svc ping | grep -q PONG; do
+                echo "Waiting for Redis..."; sleep 3
+              done
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+      containers:
+        - name: backend
+          image: daggu1997/tfgen_backend:v0.0.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 4000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: tfgen-config
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: tfgen-secret
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: tfgen-secret
+                  key: REDIS_URL
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: tfgen-secret
+                  key: JWT_SECRET
+            - name: JWT_REFRESH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: tfgen-secret
+                  key: JWT_REFRESH_SECRET
+            - name: ENCRYPT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: tfgen-secret
+                  key: ENCRYPT_KEY
+            - name: SMTP_USER
+              valueFrom:
+                secretKeyRef:
+                  name: tfgen-secret
+                  key: SMTP_USER
+            - name: SMTP_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: tfgen-secret
+                  key: SMTP_PASS
+            - name: SMTP_FROM
+              valueFrom:
+                secretKeyRef:
+                  name: tfgen-secret
+                  key: SMTP_FROM
+            - name: FRONTEND_URL
+              valueFrom:
+                secretKeyRef:
+                  name: tfgen-secret
+                  key: FRONTEND_URL
+          volumeMounts:
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 4000
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 4
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 4000
+              scheme: HTTP
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: 4000
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 20   
+      volumes:
+        - name: docker-sock
+          hostPath:
+            path: /var/run/docker.sock
+            type: Socket

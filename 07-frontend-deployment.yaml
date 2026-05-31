@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: tfgen-frontend
+  namespace: tfgen
+  labels:
+    app.kubernetes.io/name: tfgen-frontend
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: tfgen
+spec:
+  type: ClusterIP
+  selector:
+    app: tfgen-frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      protocol: TCP
+---
+# ── Deployment ──────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tfgen-frontend
+  namespace: tfgen
+  labels:
+    app.kubernetes.io/name: tfgen-frontend
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: tfgen
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: tfgen-frontend
+  template:
+    metadata:
+      labels:
+        app: tfgen-frontend
+        app.kubernetes.io/name: tfgen-frontend
+        app.kubernetes.io/component: frontend
+        app.kubernetes.io/part-of: tfgen
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: frontend
+          image: daggu1997/tfgen_frontend:v0.0.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /index.html
+              port: 80
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /index.html
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3

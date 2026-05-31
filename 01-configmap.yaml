@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tfgen-config
+  namespace: tfgen
+  labels:
+    app.kubernetes.io/name: tfgen
+    app.kubernetes.io/part-of: tfgen
+data:
+  PORT: "4000"
+  HOST: "0.0.0.0"
+  NODE_ENV: "production"
+  JWT_ACCESS_EXPIRY: "1h"
+  JWT_REFRESH_EXPIRY: "7d"
+  CORS_ORIGIN: "http://tfgen.example.com"
+  RATE_LIMIT_WINDOW_MS: "900000"
+  RATE_LIMIT_MAX: "1000"
+  RATE_LIMIT_TRUSTED_IPS: "127.0.0.1,::1"
+  TRUST_PROXY: "1"
+  TF_DOCKER_IMAGE: "hashicorp/terraform:1.15"
+  TF_LSP_PATH: "/usr/local/bin/terraform-ls"
+  SKIP_STS_VERIFY: "false"
+  SMTP_HOST: "smtp.gmail.com"
+  SMTP_PORT: "587"
+  SMTP_SECURE: "false"
+  FRONTEND_URL: "http://tfgen.example.com"

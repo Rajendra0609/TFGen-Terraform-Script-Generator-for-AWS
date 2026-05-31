@@ -1,0 +1,55 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tfgen-ingress
+  namespace: tfgen
+  labels:
+    app.kubernetes.io/name: tfgen-ingress
+    app.kubernetes.io/part-of: tfgen
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    nginx.ingress.kubernetes.io/proxy-set-headers: "tfgen/websocket-headers"
+    nginx.ingress.kubernetes.io/proxy-body-size: "16m"
+
+spec:
+
+  rules:
+    - host: tfgen.example.com
+      http:
+        paths:
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: tfgen-backend
+                port:
+                  number: 4000
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: tfgen-backend
+                port:
+                  number: 4000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: tfgen-frontend
+                port:
+                  number: 80
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: websocket-headers
+  namespace: tfgen
+  labels:
+    app.kubernetes.io/name: tfgen-ingress
+    app.kubernetes.io/part-of: tfgen
+data:
+  Upgrade: "$http_upgrade"
+  Connection: "upgrade"
