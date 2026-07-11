@@ -62,10 +62,25 @@ spec:
         app.kubernetes.io/part-of: tfgen
     spec:
       terminationGracePeriodSeconds: 60
+      # Nothing in this pod talks to the Kubernetes API.
+      automountServiceAccountToken: false
+      securityContext:
+        # The official postgres image's entrypoint needs to run as root
+        # briefly to chown/init the data directory, then drops to the
+        # `postgres` user (uid 999) itself — so we set fsGroup (for volume
+        # ownership) but do NOT force runAsNonRoot/runAsUser at the pod
+        # level, which would break that entrypoint.
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: postgres
           image: daggu1997/tfgen_postgres:v0.0.1
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: postgres
               containerPort: 5432
@@ -143,6 +158,11 @@ spec:
       spec:
         accessModes:
           - ReadWriteOnce
+        # No storageClassName set → uses your cluster's default StorageClass.
+        # If your cluster has none, this PVC will stay Pending forever.
+        # Uncomment and set explicitly, e.g.:
+        #   storageClassName: gp3        # AWS EKS
+        #   storageClassName: standard   # GKE / minikube / k3s
         resources:
           requests:
             storage: 10Gi

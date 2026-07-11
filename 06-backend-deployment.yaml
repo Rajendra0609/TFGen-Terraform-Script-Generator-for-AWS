@@ -46,7 +46,12 @@ spec:
         app.kubernetes.io/part-of: tfgen
     spec:
       terminationGracePeriodSeconds: 30
-      
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+
       initContainers:
         - name: wait-for-postgres
           image: postgres:15
@@ -78,9 +83,15 @@ spec:
             - sh
             - -c
             - |
-              until redis-cli -h tfgen-redis-svc ping | grep -q PONG; do
+              until redis-cli -h tfgen-redis-svc -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG; do
                 echo "Waiting for Redis..."; sleep 3
               done
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tfgen-secret
+                  key: REDIS_PASSWORD
           resources:
             requests:
               cpu: "50m"
@@ -92,6 +103,10 @@ spec:
         - name: backend
           image: daggu1997/tfgen_backend:v0.0.1
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: http
               containerPort: 4000
@@ -145,9 +160,37 @@ spec:
                 secretKeyRef:
                   name: tfgen-secret
                   key: FRONTEND_URL
-          volumeMounts:
-            - name: docker-sock
-              mountPath: /var/run/docker.sock
+          # REMOVED — CRITICAL SECURITY FIX: this container used to mount
+          # /var/run/docker.sock straight from the node via a hostPath
+          # volume. In Kubernetes, that's not the same risk-tradeoff it is
+          # in a single-host docker-compose setup — anything that can reach
+          # a node's Docker socket can launch a --privileged container with
+          # the node's root filesystem bind-mounted in, which is a full node
+          # compromise (and from there, frequently a full cluster
+          # compromise via that node's kubelet credentials). This app
+          # doesn't need it to function: backend/Dockerfile already bundles
+          # real `terraform`/`terraform-ls` binaries (binary mode — no
+          # Docker involved at all for plan/validate/fmt/LSP), and
+          # backend/utils/dockerAvailable.js's isDockerAvailable() is
+          # checked before every Docker-fallback call (checkov.js,
+          # infracost.js, runner.js) and fails soft, not hard, when Docker
+          # isn't reachable — confirmed by reading through that code path.
+          #
+          # Tradeoff: Checkov security-scanning and Infracost cost-estimates
+          # have no local-binary alternative in this codebase today, so
+          # those two specific features will report "unavailable" in this
+          # cluster until one of the following is done (neither needs a
+          # node-level docker.sock):
+          #   (a) install the real `checkov` (pip) and `infracost` CLI
+          #       binaries directly into backend/Dockerfile — the correct
+          #       long-term fix, removes the Docker dependency entirely; or
+          #   (b) run a locked-down docker-socket-proxy (e.g. Tecnativa) as
+          #       its own Deployment in this namespace and point DOCKER_HOST
+          #       at it over TCP — mirrors docker-compose.yml's approach,
+          #       but still only as safe as whatever node that proxy itself
+          #       runs on, so (a) is strongly preferred for Kubernetes.
+          # Happy to wire up (a) in the Dockerfile if you want that feature
+          # parity — just ask.
           resources:
             requests:
               cpu: "250m"
@@ -182,8 +225,3 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 20   
-      volumes:
-        - name: docker-sock
-          hostPath:
-            path: /var/run/docker.sock
-            type: Socket

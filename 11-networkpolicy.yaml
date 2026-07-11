@@ -1,0 +1,124 @@
+# Baseline network segmentation for the tfgen namespace.
+#
+# Without these, every Service in this namespace is reachable from any pod
+# anywhere in the cluster by default — including tfgen-postgres-svc and
+# tfgen-redis-svc, regardless of how strong their passwords are. This is the
+# in-cluster equivalent of the network segmentation docker-compose.yml
+# already does for the Compose deployment (internal-only networks for
+# db/cache) — it's not optional for a "production" deployment, it's the
+# other half of the auth fixes in 02-secret.yaml/04-redis-statefulset.yaml.
+#
+# Requires a CNI that enforces NetworkPolicy (Calico, Cilium, AWS VPC CNI +
+# network-policy-agent, GKE's default CNI, etc.) — a few CNIs (e.g. plain
+# flannel) do not enforce these at all, in which case this file is silently
+# a no-op. Verify enforcement on your cluster before relying on it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: tfgen
+  labels:
+    app.kubernetes.io/part-of: tfgen
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-frontend
+  namespace: tfgen
+  labels:
+    app.kubernetes.io/part-of: tfgen
+spec:
+  podSelector:
+    matchLabels:
+      app: tfgen-frontend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Traffic from the ingress-nginx controller. The exact labels depend
+        # on how ingress-nginx was installed — this matches the common Helm
+        # chart defaults. Check with:
+        #   kubectl get pods -n ingress-nginx --show-labels
+        # and adjust if yours differ.
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-backend
+  namespace: tfgen
+  labels:
+    app.kubernetes.io/part-of: tfgen
+spec:
+  podSelector:
+    matchLabels:
+      app: tfgen-backend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 4000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-to-postgres
+  namespace: tfgen
+  labels:
+    app.kubernetes.io/part-of: tfgen
+spec:
+  podSelector:
+    matchLabels:
+      app: tfgen-postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: tfgen-backend
+        # The db-init Job's pods carry this label (see 05-db-init-job.yaml)
+        - podSelector:
+            matchLabels:
+              app: tfgen-db-init
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-to-redis
+  namespace: tfgen
+  labels:
+    app.kubernetes.io/part-of: tfgen
+spec:
+  podSelector:
+    matchLabels:
+      app: tfgen-redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: tfgen-backend
+      ports:
+        - protocol: TCP
+          port: 6379

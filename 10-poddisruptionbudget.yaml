@@ -1,0 +1,33 @@
+# PodDisruptionBudgets — protect backend/frontend availability during
+# voluntary disruptions (node drains, cluster-autoscaler scale-down,
+# `kubectl drain`, etc.). Not added for Postgres/Redis: those run a single
+# replica each, so a PDB there would just block every voluntary eviction
+# forever rather than usefully spreading disruption — a single-replica
+# StatefulSet has no redundancy for a PDB to protect.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: tfgen-backend-pdb
+  namespace: tfgen
+  labels:
+    app.kubernetes.io/name: tfgen-backend
+    app.kubernetes.io/part-of: tfgen
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: tfgen-backend
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: tfgen-frontend-pdb
+  namespace: tfgen
+  labels:
+    app.kubernetes.io/name: tfgen-frontend
+    app.kubernetes.io/part-of: tfgen
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: tfgen-frontend

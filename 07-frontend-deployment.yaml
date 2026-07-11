@@ -14,7 +14,12 @@ spec:
   ports:
     - name: http
       port: 80
-      targetPort: 80
+      # FIXED: nginx in this image runs as a non-root user and therefore
+      # can't bind port 80 (privileged) — it listens on 8080 (see
+      # frontend/Dockerfile `EXPOSE 8080` + nginx.conf `listen 8080`). This
+      # was pointed at 80, where nothing was listening — every request
+      # would have failed.
+      targetPort: 8080
       protocol: TCP
 ---
 # ── Deployment ──────────────────────────────────────────────
@@ -46,13 +51,23 @@ spec:
         app.kubernetes.io/part-of: tfgen
     spec:
       terminationGracePeriodSeconds: 30
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: frontend
           image: daggu1997/tfgen_frontend:v0.0.1
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: http
-              containerPort: 80
+              # FIXED: was 80 — nginx actually listens on 8080 in this image.
+              containerPort: 8080
               protocol: TCP
           resources:
             requests:
@@ -64,7 +79,7 @@ spec:
           livenessProbe:
             httpGet:
               path: /index.html
-              port: 80
+              port: 8080
             initialDelaySeconds: 15
             periodSeconds: 20
             timeoutSeconds: 5
@@ -72,7 +87,7 @@ spec:
           readinessProbe:
             httpGet:
               path: /index.html
-              port: 80
+              port: 8080
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 3

@@ -836,6 +836,15 @@ data:
 apiVersion: batch/v1
 kind: Job
 metadata:
+  # ⚠️ Jobs are immutable once created — if you change schema.sql/seed.sql
+  # (i.e. this file's two ConfigMaps) and re-`kubectl apply` on a cluster
+  # where this Job already ran to completion, apply will just no-op (the
+  # Job spec "changed" but Kubernetes won't recreate a Job in place). Before
+  # re-running after a schema/seed change:
+  #   kubectl delete job/tfgen-db-init -n tfgen --ignore-not-found
+  #   kubectl apply -f 05-db-init-job.yaml -n tfgen
+  # (schema.sql/seed.sql are themselves idempotent — CREATE TABLE IF NOT
+  # EXISTS / ON CONFLICT DO UPDATE — so re-running after delete is safe.)
   name: tfgen-db-init
   namespace: tfgen
   labels:
@@ -845,6 +854,11 @@ metadata:
 spec:
   backoffLimit: 4
   activeDeadlineSeconds: 300
+  # Auto-delete the completed Job (and its pod) after 10 minutes so
+  # `kubectl get jobs` in this namespace doesn't accumulate one stale
+  # "Completed" entry per deploy. Requires the TTLAfterFinished feature,
+  # GA/on-by-default since Kubernetes 1.23.
+  ttlSecondsAfterFinished: 600
   template:
     metadata:
       labels:
@@ -852,11 +866,21 @@ spec:
         app.kubernetes.io/part-of: tfgen
     spec:
       restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
         # Wait until PostgreSQL is accepting connections before running SQL.
         - name: wait-for-postgres
           image: postgres:15
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           command:
             - sh
             - -c
@@ -884,6 +908,10 @@ spec:
         - name: db-init
           image: postgres:15
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           command:
             - sh
             - -c

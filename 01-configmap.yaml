@@ -12,15 +12,36 @@ data:
   NODE_ENV: "production"
   JWT_ACCESS_EXPIRY: "1h"
   JWT_REFRESH_EXPIRY: "7d"
-  CORS_ORIGIN: "http://tfgen.example.com"
+  # ── REPLACE tfgen.example.com everywhere in this file + 08-ingress.yaml with
+  # your real domain before deploying. Using https:// here assumes you've
+  # wired up the TLS block added to 08-ingress.yaml (cert-manager or a
+  # manually-provisioned cert) — switch back to http:// only if you are
+  # deliberately not terminating TLS at the ingress.
+  CORS_ORIGIN: "https://tfgen.example.com"
   RATE_LIMIT_WINDOW_MS: "900000"
   RATE_LIMIT_MAX: "1000"
   RATE_LIMIT_TRUSTED_IPS: "127.0.0.1,::1"
   TRUST_PROXY: "1"
-  TF_DOCKER_IMAGE: "hashicorp/terraform:1.15"
+  # FIXED: this used to hardcode TF_DOCKER_IMAGE to a mutable tag
+  # ("hashicorp/terraform:1.15"), which silently overrode
+  # backend/terraform/runner.js's own digest-pinned default — the exact
+  # thing BUG-011/SECURITY FIX (L-06) in that file exists to prevent (a
+  # mutable tag can change under you between pod restarts with no warning).
+  # Deliberately left unset here so the app's verified digest pin applies.
+  # If you do need to override it, pin by digest, not by tag:
+  #   TF_DOCKER_IMAGE: "hashicorp/terraform@sha256:<verified-digest>"
   TF_LSP_PATH: "/usr/local/bin/terraform-ls"
+  # ⚠️ This ConfigMap shipped with SKIP_STS_VERIFY=false, but the project's
+  # own README for this deployment says it should be "true" because pods in
+  # a cluster with no NAT gateway can't reach sts.amazonaws.com and the
+  # verification call will just fail/slow down startup. Decide this based on
+  # YOUR cluster's egress, don't cargo-cult either value:
+  #   false → backend verifies AWS creds against STS at startup (safer, but
+  #           requires outbound internet access from pods)
+  #   true  → skips that check entirely (needed if pods have no NAT/egress)
   SKIP_STS_VERIFY: "false"
   SMTP_HOST: "smtp.gmail.com"
   SMTP_PORT: "587"
   SMTP_SECURE: "false"
-  FRONTEND_URL: "http://tfgen.example.com"
+  FRONTEND_URL: "https://tfgen.example.com"
+

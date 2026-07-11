@@ -62,17 +62,42 @@ spec:
         app.kubernetes.io/part-of: tfgen
     spec:
       terminationGracePeriodSeconds: 30
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: redis
           image: redis:7
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          # FIXED: this used to start Redis with no authentication at all —
+          # `redis://tfgen-redis-svc:6379` (see 02-secret.yaml) was reachable,
+          # unauthenticated, from any pod in the cluster that could resolve
+          # the Service. `--requirepass $(REDIS_PASSWORD)` below pulls the
+          # password from the env var Kubernetes substitutes into `command`/
+          # `args` from the secretKeyRef right below it.
           command:
             - redis-server
             - --appendonly
             - "yes"
             - --save
-            - "60"        
+            - "60"
             - "1"
+            - --requirepass
+            - $(REDIS_PASSWORD)
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tfgen-secret
+                  key: REDIS_PASSWORD
           ports:
             - name: redis
               containerPort: 6379
@@ -89,9 +114,12 @@ spec:
               memory: "512Mi"
           livenessProbe:
             exec:
+              # FIXED: `redis-cli ping` alone would now fail with
+              # "NOAUTH Authentication required" once --requirepass is set.
               command:
-                - redis-cli
-                - ping
+                - sh
+                - -c
+                - 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG'
             initialDelaySeconds: 15
             periodSeconds: 10
             timeoutSeconds: 5
@@ -99,8 +127,9 @@ spec:
           readinessProbe:
             exec:
               command:
-                - redis-cli
-                - ping
+                - sh
+                - -c
+                - 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG'
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 3
