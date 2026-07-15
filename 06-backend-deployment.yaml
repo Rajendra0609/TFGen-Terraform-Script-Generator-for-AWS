@@ -54,7 +54,7 @@ spec:
 
       initContainers:
         - name: wait-for-postgres
-          image: postgres:15
+          image: daggu1997/tfgen_postgres:v0.0.2
           imagePullPolicy: IfNotPresent
           command:
             - sh
@@ -101,7 +101,7 @@ spec:
               memory: "128Mi"
       containers:
         - name: backend
-          image: daggu1997/tfgen_backend:v0.0.1
+          image: daggu1997/tfgen_backend:v0.0.2
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
