@@ -875,7 +875,7 @@ spec:
       initContainers:
         # Wait until PostgreSQL is accepting connections before running SQL.
         - name: wait-for-postgres
-          image: postgres:15
+          image: postgres:15-alpine
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -906,7 +906,7 @@ spec:
               memory: "128Mi"
       containers:
         - name: db-init
-          image: postgres:15
+          image: postgres:15-alpine
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

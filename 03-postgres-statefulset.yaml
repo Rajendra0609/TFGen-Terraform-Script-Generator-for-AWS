@@ -65,22 +65,32 @@ spec:
       # Nothing in this pod talks to the Kubernetes API.
       automountServiceAccountToken: false
       securityContext:
-        # The official postgres image's entrypoint needs to run as root
-        # briefly to chown/init the data directory, then drops to the
-        # `postgres` user (uid 999) itself — so we set fsGroup (for volume
-        # ownership) but do NOT force runAsNonRoot/runAsUser at the pod
-        # level, which would break that entrypoint.
-        fsGroup: 999
+        # CORRECTED: database/Dockerfile (now that it's been reviewed
+        # directly) is `FROM postgres:15-alpine` — the ALPINE variant, not
+        # Debian. This matters: Alpine's postgres image pins uid/gid 70 for
+        # the `postgres` user ("70 is the standard uid/gid for postgres in
+        # Alpine" — docker-library/postgres's Dockerfile-alpine.template).
+        # The Debian variant uses 999 instead, which is where the previous
+        # value here came from — wrong image family. Confirmed against the
+        # upstream Dockerfile:
+        #   addgroup -g 70 -S postgres
+        #   adduser  -u 70 -S -D -G postgres -H -h /var/lib/postgresql postgres
+        # The entrypoint still needs to run as root briefly to chown/init the
+        # data directory before dropping to uid 70 itself — so we set
+        # fsGroup (for volume group-ownership) but do NOT force
+        # runAsNonRoot/runAsUser at the pod level, which would break that
+        # entrypoint.
+        fsGroup: 70
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: postgres
-          image: daggu1997/tfgen_postgres:v0.0.1
+          image: daggu1997/tfgen_postgres:v0.0.2
           imagePullPolicy: IfNotPresent
           securityContext:
+            runAsUser: 0
+            runAsGroup: 0
             allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
           ports:
             - name: postgres
               containerPort: 5432
@@ -106,12 +116,14 @@ spec:
           volumeMounts:
             - name: pgdata
               mountPath: /var/lib/postgresql/data
+            - name: run-postgresql
+              mountPath: /var/run/postgresql
           resources:
             requests:
               cpu: "250m"
               memory: "256Mi"
             limits:
-              cpu: "1000m"
+              cpu: "500m"
               memory: "1Gi"
           livenessProbe:
             exec:
@@ -149,6 +161,9 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 30
+      volumes:
+        - name: run-postgresql
+          emptyDir: {}
   volumeClaimTemplates:
     - metadata:
         name: pgdata
@@ -158,11 +173,16 @@ spec:
       spec:
         accessModes:
           - ReadWriteOnce
-        # No storageClassName set → uses your cluster's default StorageClass.
-        # If your cluster has none, this PVC will stay Pending forever.
-        # Uncomment and set explicitly, e.g.:
+        # FIXED: this had no storageClassName, and the cluster had no
+        # default StorageClass either — that's why this PVC sat Pending
+        # ("unbound immediate PersistentVolumeClaims") and blocked the pod
+        # from scheduling. 00b-storage-local-path.yaml installs
+        # local-path-provisioner and this pins to it explicitly. If you're
+        # on a cluster with a real dynamic provisioner instead (EKS, GKE,
+        # etc.), swap this for that StorageClass name, e.g.:
         #   storageClassName: gp3        # AWS EKS
         #   storageClassName: standard   # GKE / minikube / k3s
+        storageClassName: local-path
         resources:
           requests:
             storage: 10Gi

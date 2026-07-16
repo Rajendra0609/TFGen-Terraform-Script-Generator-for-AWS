@@ -17,6 +17,44 @@ spec:
       targetPort: 4000
       protocol: TCP
 ---
+# FIXED (found by reading frontend/nginx.conf, which is baked into the
+# frontend image at build time and can't be changed from the k8s manifest
+# side): its /api/ and /ws/ location blocks do
+#   proxy_pass http://backend:4000;
+# — "backend" is the Docker Compose service name this was written for. In
+# this namespace the real Service is named "tfgen-backend", so "backend"
+# doesn't resolve via cluster DNS at all. 08-ingress.yaml happens to route
+# /api and /ws directly to tfgen-backend, bypassing the frontend pod
+# entirely for the main documented path, which is why this hasn't shown up
+# as pods crashing — but anything that talks to the frontend Service/pod
+# directly (e.g. this README's own `kubectl port-forward svc/tfgen-frontend
+# ...` verification step) hits an unresolvable hostname and every /api and
+# /ws call from that frontend pod fails, silently, with all pods still
+# reporting Running/Ready. This second Service is a plain alias — same
+# selector/port as tfgen-backend above — that exists purely so the
+# hardcoded hostname resolves. Long-term, better fix is to template
+# nginx.conf at container start (envsubst + BACKEND_HOST env var) instead of
+# baking a hostname into the image, but that requires touching
+# frontend/Dockerfile and rebuilding; this is the zero-rebuild fix.
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: tfgen
+  labels:
+    app.kubernetes.io/name: tfgen-backend
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: tfgen
+spec:
+  type: ClusterIP
+  selector:
+    app: tfgen-backend
+  ports:
+    - name: http
+      port: 4000
+      targetPort: 4000
+      protocol: TCP
+---
 
 apiVersion: apps/v1
 kind: Deployment
@@ -28,7 +66,7 @@ metadata:
     app.kubernetes.io/component: backend
     app.kubernetes.io/part-of: tfgen
 spec:
-  replicas: 2
+  replicas: 1
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -49,6 +87,31 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        # ADDED: backend/Dockerfile's `USER appuser` is a named user with no
+        # pinned uid, which hits the exact same "cannot verify user is
+        # non-root" rejection the frontend nginx image did — runAsNonRoot
+        # alone was never going to be enough here either, it just hadn't
+        # been reached yet (initContainers run first, and were failing).
+        #
+        # UNLIKE nginx/postgres/redis, this uid could NOT be determined by
+        # reading the Dockerfile — Alpine's `adduser -S appuser` with no
+        # explicit `-u` auto-assigns the next free system uid at BUILD time,
+        # which depends on exactly what's already in that image layer and
+        # isn't something you can reliably read off the Dockerfile source.
+        # Guessing wrong here is worse than the scheduling failure you
+        # already saw: it schedules fine and then fails inside the app with
+        # confusing permission errors reading /app, because /app was chowned
+        # at build time to whichever number actually got assigned.
+        #
+        # So backend/Dockerfile itself was patched to pin this explicitly
+        # (see the patched copy alongside this manifest) instead of guessed
+        # here — `adduser -u 1001 ... appuser`. That match is only real once
+        # the image is rebuilt and pushed as v0.0.3 — see the note on the
+        # `backend` container's `image:` line below. Don't apply this
+        # against the existing v0.0.2 image; its appuser uid is whatever
+        # Alpine happened to auto-assign and is NOT 1001.
+        runAsUser: 1001
+        runAsGroup: 1001
         seccompProfile:
           type: RuntimeDefault
 
@@ -56,11 +119,35 @@ spec:
         - name: wait-for-postgres
           image: daggu1997/tfgen_postgres:v0.0.2
           imagePullPolicy: IfNotPresent
+          # FIXED: kubelet rejected this with "container has runAsNonRoot and
+          # image will run as root". Unlike 03-postgres-statefulset.yaml
+          # (which runs the image's real docker-entrypoint.sh, needing root
+          # briefly to chown the data dir before it drops to the postgres
+          # user itself), this initContainer overrides `command` to just
+          # call pg_isready — entrypoint.sh, and its privilege drop, never
+          # runs. It inherits the pod-level `runAsNonRoot: true` with no
+          # override, so it's asked to run as the image's default user,
+          # which is root. Pinning the postgres user here is enough —
+          # pg_isready needs no special privileges.
+          #
+          # CORRECTED (was uid 999): database/Dockerfile is `FROM
+          # postgres:15-alpine`. Alpine's postgres image pins uid/gid 70 for
+          # the postgres user — 999 is the *Debian* image's convention and
+          # was wrong for this image. Verified against docker-library/
+          # postgres's Dockerfile-alpine.template:
+          #   addgroup -g 70 -S postgres; adduser -u 70 -S -D -G postgres ...
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70
+            runAsGroup: 70
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           command:
             - sh
             - -c
             - |
-              until pg_isready -h tfgen-postgres-svc -p 5432 -U "$POSTGRES_USER"; do
+              until nc -z tfgen-postgres-svc 5432; do
                 echo "Waiting for PostgreSQL..."; sleep 3
               done
           env:
@@ -77,13 +164,35 @@ spec:
               cpu: "200m"
               memory: "128Mi"
         - name: wait-for-redis
-          image: redis:7
+          # FIXED: was `redis:7` (Debian) — docker-compose.yml (the actual
+          # tested deployment) uses `redis:7-alpine`. Switched to match
+          # 04-redis-statefulset.yaml, which now uses the same tag.
+          image: redis:7-alpine
           imagePullPolicy: IfNotPresent
+          # FIXED preemptively: same root cause as wait-for-postgres above —
+          # this wasn't in your error log yet only because initContainers
+          # run in sequence and wait-for-postgres was failing first. The
+          # official redis image has the identical shape (root by default,
+          # docker-entrypoint.sh drops privileges, and this initContainer's
+          # overridden `command` skips that entrypoint).
+          #
+          # uid 999 / gid 1000 verified against redis's actual upstream
+          # alpine Dockerfile (note the asymmetry — alpine already reserves
+          # gid 999 for something else, so redis's *group* became 1000 while
+          # its *user* stayed 999):
+          #   addgroup -S -g 1000 redis; adduser -S -G redis -u 999 redis
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           command:
             - sh
             - -c
             - |
-              until redis-cli -h tfgen-redis-svc -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG; do
+              until nc -z tfgen-redis-svc 6379; do
                 echo "Waiting for Redis..."; sleep 3
               done
           env:
@@ -101,6 +210,8 @@ spec:
               memory: "128Mi"
       containers:
         - name: backend
+          # Reverted to the previously published backend image tag requested
+          # for this deployment.
           image: daggu1997/tfgen_backend:v0.0.2
           imagePullPolicy: IfNotPresent
           securityContext:

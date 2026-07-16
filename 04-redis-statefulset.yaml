@@ -65,13 +65,30 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        # CORRECTED after reading redis's actual upstream alpine Dockerfile:
+        #   addgroup -S -g 1000 redis   # alpine already has a gid 999 taken,
+        #                               # so the *group* had to become 1000
+        #   adduser  -S -G redis -u 999 redis
+        # i.e. the redis USER is uid 999, but its GROUP is gid 1000 — an
+        # asymmetric pair, not 999/999 like the Debian image. runAsGroup and
+        # fsGroup both need to be 1000 for volume permissions to actually
+        # line up; the previous fsGroup: 999 here was silently wrong (would
+        # likely have surfaced as an AOF/RDB permission error on /data, a
+        # separate failure after the runAsNonRoot one you already hit).
         runAsUser: 999
-        fsGroup: 999
+        runAsGroup: 1000
+        fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: redis
-          image: redis:7
+          # FIXED: was `redis:7` (Debian-based) — docker-compose.yml (the
+          # actual tested/intended deployment) uses `redis:7-alpine`.
+          # Switched to match, and the uid/gid above are pinned specifically
+          # for the alpine variant (see securityContext comment above) — if
+          # you ever switch back to a Debian tag, these need to change too
+          # (Debian's redis user is a plain 999/999, no asymmetry).
+          image: redis:7-alpine
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -143,7 +160,10 @@ spec:
       spec:
         accessModes:
           - ReadWriteOnce
-        # storageClassName: gp3
+        # FIXED: same issue as pgdata in 03-postgres-statefulset.yaml — no
+        # storageClassName and no default StorageClass in the cluster meant
+        # this PVC could never bind. See 00b-storage-local-path.yaml.
+        storageClassName: local-path
         resources:
           requests:
             storage: 5Gi

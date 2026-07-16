@@ -1,17 +1,4 @@
-# Baseline network segmentation for the tfgen namespace.
-#
-# Without these, every Service in this namespace is reachable from any pod
-# anywhere in the cluster by default — including tfgen-postgres-svc and
-# tfgen-redis-svc, regardless of how strong their passwords are. This is the
-# in-cluster equivalent of the network segmentation docker-compose.yml
-# already does for the Compose deployment (internal-only networks for
-# db/cache) — it's not optional for a "production" deployment, it's the
-# other half of the auth fixes in 02-secret.yaml/04-redis-statefulset.yaml.
-#
-# Requires a CNI that enforces NetworkPolicy (Calico, Cilium, AWS VPC CNI +
-# network-policy-agent, GKE's default CNI, etc.) — a few CNIs (e.g. plain
-# flannel) do not enforce these at all, in which case this file is silently
-# a no-op. Verify enforcement on your cluster before relying on it.
+
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -71,6 +58,39 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 4000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-to-backend
+  namespace: tfgen
+  labels:
+    app.kubernetes.io/part-of: tfgen
+spec:
+  # ADDED: found while tracing through the "backend" Service alias fix in
+  # 06-backend-deployment.yaml. frontend/nginx.conf proxies /api/ and /ws/
+  # to http://backend:4000 — that Service alias makes the DNS name resolve,
+  # but without this rule the connection would still be silently dropped
+  # here, since previously only ingress-nginx→backend was ever allowed.
+  # ingress-nginx routes /api and /ws directly to tfgen-backend and never
+  # touches the frontend pod on the main documented path, so this gap was
+  # invisible there — but it would have blocked the frontend pod's own
+  # /api and /ws proxying whenever something talks to the frontend
+  # Service/pod directly, e.g. this README's `kubectl port-forward
+  # svc/tfgen-frontend ...` local-testing step.
+  podSelector:
+    matchLabels:
+      app: tfgen-backend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: tfgen-frontend
       ports:
         - protocol: TCP
           port: 4000
