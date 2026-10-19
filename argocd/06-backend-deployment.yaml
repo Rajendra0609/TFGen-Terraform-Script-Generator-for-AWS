@@ -117,7 +117,7 @@ spec:
 
       initContainers:
         - name: wait-for-postgres
-          image: daggu1997/tfgen_postgres:051386f1
+          image: daggu1997/tfgen_postgres:v0.0.3
           imagePullPolicy: IfNotPresent
           # FIXED: kubelet rejected this with "container has runAsNonRoot and
           # image will run as root". Unlike 03-postgres-statefulset.yaml
